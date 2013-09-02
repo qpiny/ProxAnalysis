@@ -3,3 +3,6 @@
 /.classpath
 /.project
 /gradle.properties
+/bin
+/build
+/.cache
