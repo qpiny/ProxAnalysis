@@ -33,7 +33,7 @@ object Main extends App {
   }
 
   def getData(filename: String) = {
-    val raw = RawByteData(Source.fromFile(s"traces/${filename}")(Codec.UTF8))
+    val raw = RawIntData(Source.fromFile(s"traces/${filename}")(Codec.UTF8))
     val ask = raw.ask
     val norm = ask.normalise
     val norm2 = BinData(norm.tail)
@@ -46,11 +46,11 @@ object Main extends App {
   override def main(args: Array[String]): Unit = {
     val data = new java.io.File("traces").listFiles.par.map(f => getData(f.getName)).reduce(_ ++ _)
     for ((k, v) <- data)
-      println("${k},${v}")
+      println(s"${k},${v}")
   }
 
   def debug = {
-    val raw = RawByteData(Source.fromFile("traces/a.data")(Codec.UTF8))
+    val raw = RawIntData(Source.fromFile("traces/a.data")(Codec.UTF8))
     val index = (0 to raw.length).map(b => f"$b%4d").mkString(",")
     println(s"idx =${index}")
     println(s"raw (${raw.length}) =${raw}")

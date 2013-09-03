@@ -3,13 +3,13 @@ package org.rejna.prox
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
 
-object RawByteData {
+object RawIntData {
   def apply(input: Source) = {
-    new RawByteData(input.mkString.split("\\s+").map(_.toByte): _*)
+    new RawIntData(input.mkString.split("\\s+").map(_.toInt): _*)
   }
 }
 
-class RawByteData(val values: Byte*) extends IndexedSeq[Byte] {
+class RawIntData(val values: Int*) extends IndexedSeq[Int] {
   val bit0 = false
   val bit1 = true
   def apply(idx: Int) = values(idx)
