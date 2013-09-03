@@ -4,6 +4,8 @@ apply plugin: 'scala'
 apply plugin: 'eclipse'
 apply plugin: 'application'
 
+mainClassName = 'org.rejna.prox.Main'
+
 ext {
 	majorScalaVersion = '2.10'
 	scalaVersion = '2.10.2'
