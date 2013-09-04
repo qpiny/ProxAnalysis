@@ -7,6 +7,9 @@ object RawIntData {
   def apply(input: Source) = {
     new RawIntData(input.mkString.split("\\s+").map(_.toInt): _*)
   }
+  def apply(values: Seq[Int]) = {
+    new RawIntData(values: _*)
+  }
 }
 
 class RawIntData(val values: Int*) extends IndexedSeq[Int] {
@@ -15,7 +18,7 @@ class RawIntData(val values: Int*) extends IndexedSeq[Int] {
   def apply(idx: Int) = values(idx)
   def length = values.length
 
-  lazy val ask = {
+  lazy val ask2 = {
     val s = (Seq.empty[Boolean] /: this)((ret, curr) => {
       val prev = ret.lastOption.getOrElse(bit0)
       if (curr == max && prev == bit0) ret :+ bit1
@@ -25,6 +28,23 @@ class RawIntData(val values: Int*) extends IndexedSeq[Int] {
     new RawBoolData(s: _*)
   }
 
+  lazy val ask = {
+    var prev = if (values.head > 0) bit1 else bit0
+    val mi = max
+    val ma = min
+    val s = for (x <- values)
+      yield x match {
+      case `ma` =>
+        prev = bit1
+        prev
+      case `mi` =>
+        prev = bit0
+        prev
+      case _ =>
+        prev
+    }
+    new RawBoolData(s: _*)
+  }
   override def toString = values.map(b => f"$b%4d").mkString(",")
 }
 
@@ -78,6 +98,8 @@ class BinData(val values: Boolean*) extends IndexedSeq[Boolean] {
   def apply(idx: Int) = values(idx)
   def length = values.length
 
+  def shift = BinData(values.tail)
+  
   def manchester(lohi: Boolean) = {
     val errors = values.grouped(2).count(t => !(t.head ^ t.last))
     val v = values.grouped(2).flatMap {
@@ -97,17 +119,15 @@ class BinData(val values: Boolean*) extends IndexedSeq[Boolean] {
     (errors, new BinData(s.toSeq: _*))
   }
 
-  def checkPeriodicityString: String = {
-    checkPeriodicity().map(b => f"$b%4d").mkString(",")
+  def checkPeriodicity: RawIntData = {
+    new RawIntData(checkPeriodicity(values.tail): _*)
   }
 
-  def checkPeriodicity(other: Seq[Boolean] = values.tail): List[Int] = {
+  def checkPeriodicity(other: Seq[Boolean]): List[Int] = {
     if (other.length < 10)
       Nil
     else {
-      val s = other.zip(values).count {
-        case (a, b) => a == b
-      }
+      val s = other.zip(values).count(x => x._1 == x._2)
       (s * 100 / other.length) :: checkPeriodicity(other.tail)
     }
   }
@@ -123,16 +143,14 @@ class BinData(val values: Boolean*) extends IndexedSeq[Boolean] {
     for ((x, i) <- values.zipWithIndex) {
       if (x == prev) {
         prevCnt += 1
-      }
-      else {
+      } else {
         if (prev) {
-          if (prevCnt > max0Cnt) {
+          if (prevCnt > max1Cnt) {
             max1Cnt = prevCnt
             max1Idx = prevIdx
           }
-        }
-        else {
-          if (prevCnt > max1Cnt) {
+        } else {
+          if (prevCnt > max0Cnt) {
             max0Cnt = prevCnt
             max0Idx = prevIdx
           }
@@ -143,6 +161,18 @@ class BinData(val values: Boolean*) extends IndexedSeq[Boolean] {
       }
     }
     (max0Cnt, max0Idx, max1Cnt, max1Idx)
+  }
+
+  def extract(size: Int, offset: Int) = {
+    BinData(values.drop(offset).take(size) ++ values.take(offset + size - values.length))
+  }
+
+  def findParity(size: Int) = {
+    RawIntData((0 until size).map {
+      case offset =>
+        val group = values.drop(offset).grouped(size + 1)
+        group.count(b => b.init.reduce(_ ^ _) == b.last) * 100 / group.length
+    })
   }
 
   override def toString = values.map(b => if (b) "1" else "0").mkString
