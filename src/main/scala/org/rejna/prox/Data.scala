@@ -2,43 +2,33 @@ package org.rejna.prox
 
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
+import scala.util.{ Try, Success, Failure }
 
-object RawIntData {
-  def apply(input: Source) = {
-    new RawIntData(input.mkString.split("\\s+").map(_.toInt): _*)
-  }
-  def apply(values: Seq[Int]) = {
-    new RawIntData(values: _*)
-  }
+class DemodulationException(message: String, val errors: Int, cause: Exception = null) extends Exception(message, cause)
+
+object Data {
+  implicit def seq2rawInt(values: Seq[Int]) = new RawIntData(values: _*)
+  implicit def source2rawInt(input: Source) = new RawIntData(input.mkString.split("\\s+").map(_.toInt): _*)
+  
+  implicit def seq2rawBool(values: Seq[Boolean]) = new RawBoolData(values: _*)
+  implicit def seq2bin(values: Seq[Boolean]) = new BinData(values: _*)
 }
 
 class RawIntData(val values: Int*) extends IndexedSeq[Int] {
-  val bit0 = false
-  val bit1 = true
   def apply(idx: Int) = values(idx)
   def length = values.length
 
-  lazy val ask2 = {
-    val s = (Seq.empty[Boolean] /: this)((ret, curr) => {
-      val prev = ret.lastOption.getOrElse(bit0)
-      if (curr == max && prev == bit0) ret :+ bit1
-      else if (curr == min && prev == bit1) ret :+ bit0
-      else ret :+ prev
-    })
-    new RawBoolData(s: _*)
-  }
-
   lazy val ask = {
-    var prev = if (values.head > 0) bit1 else bit0
+    var prev = values.head > 0
     val mi = max
     val ma = min
     val s = for (x <- values)
       yield x match {
       case `ma` =>
-        prev = bit1
+        prev = true
         prev
       case `mi` =>
-        prev = bit0
+        prev = true
         prev
       case _ =>
         prev
@@ -90,33 +80,37 @@ class RawBoolData(val values: Boolean*) extends IndexedSeq[Boolean] {
   override def toString = values.map(b => if (b) "   1" else "   0").mkString(",")
 }
 
-object BinData {
-  def apply(data: Seq[Boolean]) = new BinData(data: _*)
-}
-
 class BinData(val values: Boolean*) extends IndexedSeq[Boolean] {
   def apply(idx: Int) = values(idx)
   def length = values.length
 
   def shift = BinData(values.tail)
-  
-  def manchester(lohi: Boolean) = {
-    val errors = values.grouped(2).count(t => !(t.head ^ t.last))
-    val v = values.grouped(2).flatMap {
-      case Seq(t, l, dummy @ _*) if (t ^ l) => Some(t ^ lohi)
-      case _ => None
-    } toSeq
 
-    (errors, new BinData(v: _*))
+  def manchester(lohi: Boolean): Try[BinData] = {
+    val errors = values.grouped(2).count(t => !(t.head ^ t.last))
+    if (errors > values.length / 10) {
+      Failure(new DemodulationException(s"Manchester demodulation failed (${errors}/${values.length})", errors))
+    } else {
+      val v = values.grouped(2).flatMap {
+        case Seq(t, l, dummy @ _*) if (t ^ l) => Some(t ^ lohi)
+        case _ => None
+      }
+
+      Success(new BinData(v.toSeq: _*))
+    }
   }
 
-  def biphase(flat: Boolean) = {
+  def biphase(flat: Boolean): Try[BinData] = {
     // check biphase validity
     val errors = values.tail.grouped(2).count(t => !(t.head ^ t.last))
 
-    val s = for (t <- values.grouped(2))
-      yield t.head ^ t.last ^ flat
-    (errors, new BinData(s.toSeq: _*))
+    if (errors > values.length / 10) {
+      Failure(new DemodulationException(s"Biphase demodulation failed (${errors}/${values.length})", errors))
+    } else {
+      val v = for (t <- values.grouped(2))
+        yield t.head ^ t.last ^ flat
+      Success(new BinData(v.toSeq: _*))
+    }
   }
 
   def checkPeriodicity: RawIntData = {
@@ -167,11 +161,23 @@ class BinData(val values: Boolean*) extends IndexedSeq[Boolean] {
     BinData(values.drop(offset).take(size) ++ values.take(offset + size - values.length))
   }
 
+  def extractFromHeader(period: Int) = {
+    extract(period, maxConsecutive._2) ::
+      extract(period, maxConsecutive._4) ::
+      Nil
+  }
+
   def findParity(size: Int) = {
     RawIntData((0 until size).map {
       case offset =>
-        val group = values.drop(offset).grouped(size + 1)
-        group.count(b => b.init.reduce(_ ^ _) == b.last) * 100 / group.length
+        val group = values.drop(offset).toList.grouped(size + 1).toList
+        val l = group.length
+        group.count(b => {
+          if (b.length > 1)
+            b.init.reduce(_ ^ _) == b.last
+          else
+            true
+        }) * 100 / l
     })
   }
 
