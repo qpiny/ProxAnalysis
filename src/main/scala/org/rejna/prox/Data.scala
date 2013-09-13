@@ -6,12 +6,17 @@ import scala.util.{ Try, Success, Failure }
 
 class DemodulationException(message: String, val errors: Int, cause: Exception = null) extends Exception(message, cause)
 
-object Data {
+object DisabledData {
   implicit def seq2rawInt(values: Seq[Int]) = new RawIntData(values: _*)
   implicit def source2rawInt(input: Source) = new RawIntData(input.mkString.split("\\s+").map(_.toInt): _*)
-  
+
   implicit def seq2rawBool(values: Seq[Boolean]) = new RawBoolData(values: _*)
   implicit def seq2bin(values: Seq[Boolean]) = new BinData(values: _*)
+}
+
+object RawIntData {
+  def apply(values: Seq[Int]) = new RawIntData(values: _*)
+  def apply(input: Source) = new RawIntData(input.mkString.split("\\s+").map(_.toInt): _*)
 }
 
 class RawIntData(val values: Int*) extends IndexedSeq[Int] {
@@ -20,22 +25,26 @@ class RawIntData(val values: Int*) extends IndexedSeq[Int] {
 
   lazy val ask = {
     var prev = values.head > 0
-    val mi = max
-    val ma = min
+    val ma = max
+    val mi = min
     val s = for (x <- values)
       yield x match {
       case `ma` =>
         prev = true
         prev
       case `mi` =>
-        prev = true
+        prev = false
         prev
       case _ =>
         prev
     }
-    new RawBoolData(s: _*)
+    RawBoolData(s)
   }
   override def toString = values.map(b => f"$b%4d").mkString(",")
+}
+
+object RawBoolData {
+  def apply(values: Seq[Boolean]) = new RawBoolData(values: _*)
 }
 
 class RawBoolData(val values: Boolean*) extends IndexedSeq[Boolean] {
@@ -47,74 +56,105 @@ class RawBoolData(val values: Boolean*) extends IndexedSeq[Boolean] {
     var prev = false
     var prevIdx = 0
     for ((x, i) <- values.zipWithIndex)
-      if (x ^ prev) {
+      if (x != prev) {
         builder += i - prevIdx
         prevIdx = i
         prev = x
       }
-    builder.tail
+    builder.drop(2)
   }
 
+  // works only if there are 2 frequencies, one half of the other
   lazy val clock = if (length == 0)
-    (0, 0, 0)
-  else
-    (edges.min, edges.max, edges.sum.toFloat / edges.length)
+    1
+  else {
+    val median = (edges.max + edges.min) / 2
+    val ee = edges.map(e => if (e < median) e * 2 else e)
+    ee.sum / (2 * ee.length)
+  }
 
   lazy val normalise = {
     val builder = ListBuffer.empty[Boolean]
     var prev = true
     //builder += prev
     for (edge <- edges) {
-      val ncycles = (edge.toFloat / clock._1).round // {ncycles,edge} could be 0 ?
+      val ncycles = (edge.toFloat / clock).round // {ncycles,edge} could be 0 ?
       if (ncycles == 0) {
-        println(s"${clock._1} / ${edge} = 0")
+        println(s"${clock} / ${edge} = 0")
         builder += prev
       }
       for (i <- 1 to ncycles)
         builder += prev
       prev = !prev
     }
-    new BinData(builder: _*)
+    BinData(builder)
   }
 
   override def toString = values.map(b => if (b) "   1" else "   0").mkString(",")
+}
+
+object BinData {
+  def apply(values: Seq[Boolean]) = new BinData(values: _*)
+  def apply(input: Source) = new BinData(input.mkString.map(_ == '1'): _*)
 }
 
 class BinData(val values: Boolean*) extends IndexedSeq[Boolean] {
   def apply(idx: Int) = values(idx)
   def length = values.length
 
-  def shift = BinData(values.tail)
+  lazy val shift = BinData(values.tail)
 
-  def manchester(lohi: Boolean): Try[BinData] = {
+  def rot(n: Int) = BinData(values.drop(n) ++ values.take(n))
+
+  def corr2(that: Seq[(Boolean, Boolean)]) = that.zip(this).map {
+    case ((a, b), c) if a && b == c => (true, b)
+    case ((a, b), c) => (false, b)
+  }
+
+  def manchester(lohi: Boolean, shifted: Boolean = false): Try[BinData] = {
+    //    println(s"trying Manchester with : ${this}")
+    //    val errorIndex = values.zipWithIndex.grouped(2).collect {
+    //      case Seq((tv, ti), (lv, li), dummy @ _*) if tv == lv => (ti, li) 
+    //    }
+    //    println(s"Error are at : " + ("" /: errorIndex) {
+    //      case (s, (t, l)) => s"${s} [${t}:${l}]"
+    //    })
+
     val errors = values.grouped(2).count(t => !(t.head ^ t.last))
+
     if (errors > values.length / 10) {
-      Failure(new DemodulationException(s"Manchester demodulation failed (${errors}/${values.length})", errors))
+      if (shifted)
+        Failure(new DemodulationException(s"Manchester demodulation failed (${errors}/${values.length})", errors))
+      else
+        shift.manchester(lohi, true)
     } else {
-      val v = values.grouped(2).flatMap {
+      val v = values.grouped(2).flatMap { // use collect instead of flatmap
         case Seq(t, l, dummy @ _*) if (t ^ l) => Some(t ^ lohi)
         case _ => None
       }
 
-      Success(new BinData(v.toSeq: _*))
+      Success(BinData(v.toSeq))
     }
   }
 
-  def biphase(flat: Boolean): Try[BinData] = {
+  def biphase(flat: Boolean, shifted: Boolean = false): Try[BinData] = {
     // check biphase validity
     val errors = values.tail.grouped(2).count(t => !(t.head ^ t.last))
 
     if (errors > values.length / 10) {
-      Failure(new DemodulationException(s"Biphase demodulation failed (${errors}/${values.length})", errors))
+      if (shifted)
+        Failure(new DemodulationException(s"Biphase demodulation failed (${errors}/${values.length})", errors))
+      else
+        shift.biphase(flat, true)
     } else {
       val v = for (t <- values.grouped(2))
         yield t.head ^ t.last ^ flat
-      Success(new BinData(v.toSeq: _*))
+      Success(BinData(v.toSeq))
     }
   }
 
   def checkPeriodicity: RawIntData = {
-    new RawIntData(checkPeriodicity(values.tail): _*)
+    RawIntData(checkPeriodicity(values.tail))
   }
 
   def checkPeriodicity(other: Seq[Boolean]): List[Int] = {
@@ -182,4 +222,44 @@ class BinData(val values: Boolean*) extends IndexedSeq[Boolean] {
   }
 
   override def toString = values.map(b => if (b) "1" else "0").mkString
+}
+
+class Correlation(p: List[Int], v: Seq[Int]) extends Ordered[Correlation] {
+  def this(v: BinData) = this(List(0), v.map(if (_) 1 else 0))
+
+  lazy val size = v.length
+
+  def score = v.count(x => x == 0 || x == size)
+  
+  def compare(that: Correlation) = this.score - that.score
+  
+  def makeWith(d: BinData, top: Int) = {
+    // d.length == v.length
+    
+    var ss = List[Correlation]()
+    var min = Int.MaxValue
+    var toplen = 0
+    
+    for (i <- 0 until size) {
+      val c = new Correlation(i :: p, d.rot(i) zip v map {
+        case (true, x) => x + 1
+        case (false, x) => x
+      })
+      if (toplen < top || c.score > min) {
+        ss = (c :: ss).sorted
+        min = ss.head.score
+        toplen += 1
+      }
+      if (toplen > top) {
+        ss = ss.tail
+        min = ss.head.score
+        toplen -= 1
+      }
+    }
+    ss
+  }
+  
+  override def toString = {
+    p.mkString("[", ",", "]") + "(" + score + ")"
+  }
 }
